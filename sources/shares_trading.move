@@ -9,7 +9,7 @@ module shares_trading::shares_trading {
     use sui::table::{Self, Table};
     use std::option::{Self, Option};
 
-    // 错误码
+    // Error codes
     const EInsufficientPayment: u64 = 0;
     const EOnlySubjectCanBuyFirstShare: u64 = 1;
     const ECannotSellLastShare: u64 = 2;
@@ -17,12 +17,12 @@ module shares_trading::shares_trading {
     const ETransferFailed: u64 = 4;
     const EInsufficientLiquidity: u64 = 5;
 
-    // 常量
+    // Constants
     const BASIS_POINTS: u64 = 10000;
     const PROTOCOL_FEE_PERCENT: u64 = 500; // 5%
     const SUBJECT_FEE_PERCENT: u64 = 500; // 5%
 
-    // 事件
+    // Events
     struct Trade has copy, drop {
         trader: address,
         subject: address,
@@ -34,26 +34,26 @@ module shares_trading::shares_trading {
         supply: u64,
     }
 
-    // 平台管理员
+    // Platform administrator
     struct Admin has key {
         id: UID,
         protocol_fee_destination: address,
     }
 
-    // 主合约
+    // Main contract
     struct SharesTrading has key {
         id: UID,
-        // 每个subject的shares总供应量
+        // Total supply of shares for each subject
         shares_supply: Table<address, u64>,
-        // 用户持有的shares余额 (subject -> (owner -> balance))
+        // User's shares balance (subject -> (owner -> balance))
         shares_balance: Table<address, Table<address, u64>>,
-        // 协议费用
+        // Protocol fees balance
         protocol_fee_balance: Balance<SUI>,
-        // 流动性池
+        // Liquidity pool
         liquidity_pool: Balance<SUI>,
     }
 
-    // 初始化函数
+    // Initialization function
     fun init(ctx: &mut TxContext) {
         let admin = Admin {
             id: object::new(ctx),
@@ -72,7 +72,7 @@ module shares_trading::shares_trading {
         transfer::transfer(admin, tx_context::sender(ctx));
     }
 
-    // 计算价格的函数 (使用简单的线性定价公式: price = supply * amount)
+    // Function to calculate price (using a simple linear pricing formula: price = sum(supply + i for i in 0..amount))
     fun get_price(supply: u64, amount: u64): u64 {
         let price: u64 = 0;
         let i: u64 = 0;
@@ -85,7 +85,7 @@ module shares_trading::shares_trading {
         price
     }
 
-    // 购买shares
+    // Buy shares
     public entry fun buy_shares(
         shares_trading: &mut SharesTrading,
         shares_subject: address,
@@ -95,28 +95,28 @@ module shares_trading::shares_trading {
     ) {
         let sender = tx_context::sender(ctx);
         
-        // 检查shares_supply中是否存在shares_subject
+        // Check if shares_subject exists in shares_supply
         let supply = if (table::contains(&shares_trading.shares_supply, shares_subject)) {
             *table::borrow(&shares_trading.shares_supply, shares_subject)
         } else {
-            // 如果不存在，初始化为0
+            // If not, initialize to 0
             table::add(&mut shares_trading.shares_supply, shares_subject, 0);
             0
         };
         
-        // 只有shares的主体才能购买第一个share
+        // Only the subject can buy the first share
         assert!(supply > 0 || shares_subject == sender, EOnlySubjectCanBuyFirstShare);
         
-        // 计算价格和费用
+        // Calculate price and fees
         let price = get_price(supply, amount);
         let protocol_fee = price * PROTOCOL_FEE_PERCENT / BASIS_POINTS;
         let subject_fee = price * SUBJECT_FEE_PERCENT / BASIS_POINTS;
         let total_cost = price + protocol_fee + subject_fee;
         
-        // 检查支付是否足够
+        // Check if payment is sufficient
         assert!(coin::value(payment) >= total_cost, EInsufficientPayment);
         
-        // 更新shares余额
+        // Update shares balance
         if (!table::contains(&shares_trading.shares_balance, shares_subject)) {
             table::add(&mut shares_trading.shares_balance, shares_subject, table::new(ctx));
         };
@@ -130,26 +130,26 @@ module shares_trading::shares_trading {
         let user_balance = table::borrow_mut(balances, sender);
         *user_balance = *user_balance + amount;
         
-        // 更新供应量
+        // Update supply
         let supply_ref = table::borrow_mut(&mut shares_trading.shares_supply, shares_subject);
         *supply_ref = *supply_ref + amount;
         
-        // 处理付款
+        // Process payment
         let paid = coin::split(payment, total_cost, ctx);
         let paid_balance = coin::into_balance(paid);
         
-        // 提取协议费用
+        // Withdraw protocol fee
         let protocol_fee_balance = balance::split(&mut paid_balance, protocol_fee);
         balance::join(&mut shares_trading.protocol_fee_balance, protocol_fee_balance);
         
-        // 提取主体费用并转移给shares_subject
+        // Withdraw subject fee and transfer to shares_subject
         let subject_fee_coin = coin::from_balance(balance::split(&mut paid_balance, subject_fee), ctx);
         transfer::public_transfer(subject_fee_coin, shares_subject);
         
-        // 剩余金额加入流动性池
+        // Add remaining amount to the liquidity pool
         balance::join(&mut shares_trading.liquidity_pool, paid_balance);
         
-        // 发出事件
+        // Emit event
         event::emit(Trade {
             trader: sender,
             subject: shares_subject,
@@ -162,7 +162,7 @@ module shares_trading::shares_trading {
         });
     }
 
-    // 出售shares
+    // Sell shares
     public entry fun sell_shares(
         shares_trading: &mut SharesTrading,
         shares_subject: address,
@@ -171,14 +171,14 @@ module shares_trading::shares_trading {
     ) {
         let sender = tx_context::sender(ctx);
         
-        // 获取当前供应量
+        // Get current supply
         assert!(table::contains(&shares_trading.shares_supply, shares_subject), EInsufficientShares);
         let supply = *table::borrow(&shares_trading.shares_supply, shares_subject);
         
-        // 不能出售最后一个share
+        // Cannot sell the last share
         assert!(supply > amount, ECannotSellLastShare);
         
-        // 检查用户是否有足够的shares
+        // Check if the user has enough shares
         assert!(table::contains(&shares_trading.shares_balance, shares_subject), EInsufficientShares);
         let balances = table::borrow_mut(&mut shares_trading.shares_balance, shares_subject);
         
@@ -186,36 +186,36 @@ module shares_trading::shares_trading {
         let user_balance = table::borrow_mut(balances, sender);
         assert!(*user_balance >= amount, EInsufficientShares);
         
-        // 计算价格和费用
+        // Calculate price and fees
         let price = get_price(supply - amount, amount);
         let protocol_fee = price * PROTOCOL_FEE_PERCENT / BASIS_POINTS;
         let subject_fee = price * SUBJECT_FEE_PERCENT / BASIS_POINTS;
         let seller_amount = price - protocol_fee - subject_fee;
         
-        // 检查流动性池是否有足够的资金
+        // Check if the liquidity pool has sufficient funds
         assert!(balance::value(&shares_trading.liquidity_pool) >= price, EInsufficientLiquidity);
         
-        // 更新用户余额
+        // Update user balance
         *user_balance = *user_balance - amount;
         
-        // 更新供应量
+        // Update supply
         let supply_ref = table::borrow_mut(&mut shares_trading.shares_supply, shares_subject);
         *supply_ref = *supply_ref - amount;
         
-        // 从流动性池中提取资金
-        // 提取卖家应得的金额
+        // Withdraw funds from the liquidity pool
+        // Withdraw the amount due to the seller
         let seller_coin = coin::from_balance(balance::split(&mut shares_trading.liquidity_pool, seller_amount), ctx);
         transfer::public_transfer(seller_coin, sender);
         
-        // 提取协议费用
+        // Withdraw protocol fee
         let protocol_fee_balance = balance::split(&mut shares_trading.liquidity_pool, protocol_fee);
         balance::join(&mut shares_trading.protocol_fee_balance, protocol_fee_balance);
         
-        // 提取主体费用并转移给shares_subject
+        // Withdraw subject fee and transfer to shares_subject
         let subject_fee_coin = coin::from_balance(balance::split(&mut shares_trading.liquidity_pool, subject_fee), ctx);
         transfer::public_transfer(subject_fee_coin, shares_subject);
         
-        // 发出事件
+        // Emit event
         event::emit(Trade {
             trader: sender,
             subject: shares_subject,
@@ -228,7 +228,7 @@ module shares_trading::shares_trading {
         });
     }
 
-    // 提取协议费用
+    // Withdraw protocol fees
     public entry fun withdraw_protocol_fees(
         shares_trading: &mut SharesTrading,
         admin: &Admin,
@@ -239,7 +239,7 @@ module shares_trading::shares_trading {
         transfer::public_transfer(protocol_fee_coin, admin.protocol_fee_destination);
     }
 
-    // 更新协议费用目的地
+    // Update protocol fee destination
     public entry fun update_protocol_fee_destination(
         admin: &mut Admin,
         new_destination: address,
@@ -248,7 +248,7 @@ module shares_trading::shares_trading {
         admin.protocol_fee_destination = new_destination;
     }
 
-    // 添加流动性
+    // Add liquidity
     public entry fun add_liquidity(
         shares_trading: &mut SharesTrading,
         payment: &mut Coin<SUI>,
