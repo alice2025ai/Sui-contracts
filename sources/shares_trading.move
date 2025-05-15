@@ -72,17 +72,76 @@ module shares_trading::shares_trading {
         transfer::transfer(admin, tx_context::sender(ctx));
     }
 
-    // Function to calculate price (using a simple linear pricing formula: price = sum(supply + i for i in 0..amount))
+    // Function to calculate price (using the sum of squares pricing formula)
+    // 返回值单位为MIST (1 SUI = 10^9 MIST)
     fun get_price(supply: u64, amount: u64): u64 {
-        let price: u64 = 0;
-        let i: u64 = 0;
-        
-        while (i < amount) {
-            price = price + supply + i;
-            i = i + 1;
+        // Handle edge cases
+        if (supply == 0 && amount == 1) {
+            return 0
         };
         
-        price
+        // Calculate sum1: (supply-1)*(supply)*(2*(supply-1)+1)/6
+        let sum1 = if (supply == 0) {
+            0
+        } else {
+            let s_minus_1 = supply - 1;
+            let s = supply;
+            let numerator = s_minus_1 * s * (2 * s_minus_1 + 1);
+            numerator / 6
+        };
+        
+        // Calculate sum2: (supply-1+amount)*(supply+amount)*(2*(supply-1+amount)+1)/6
+        let s_minus_1_plus_a = if (supply == 0) { amount - 1 } else { supply - 1 + amount };
+        let s_plus_a = supply + amount;
+        let numerator = s_minus_1_plus_a * s_plus_a * (2 * s_minus_1_plus_a + 1);
+        let sum2 = numerator / 6;
+        
+        // Calculate summation (sum2 - sum1) and apply scaling factor
+        let summation = sum2 - sum1;
+        
+        // 定义MIST精度常量 (1 SUI = 10^9 MIST)
+        let mist_precision = 1000000000; // 10^9
+        
+        // 先乘以MIST精度因子再除以缩放因子，确保价格单位为MIST
+        (summation * mist_precision) / 16
+    }
+
+    // 计算购买shares的价格（不含费用），返回值单位为MIST
+    public fun get_buy_price(shares_trading: &SharesTrading, shares_subject: address, amount: u64): u64 {
+        let supply = if (table::contains(&shares_trading.shares_supply, shares_subject)) {
+            *table::borrow(&shares_trading.shares_supply, shares_subject)
+        } else {
+            0
+        };
+        
+        get_price(supply, amount)
+    }
+
+    // 计算出售shares的价格（不含费用），返回值单位为MIST
+    public fun get_sell_price(shares_trading: &SharesTrading, shares_subject: address, amount: u64): u64 {
+        assert!(table::contains(&shares_trading.shares_supply, shares_subject), EInsufficientShares);
+        let supply = *table::borrow(&shares_trading.shares_supply, shares_subject);
+        assert!(supply > amount, ECannotSellLastShare);
+        
+        get_price(supply - amount, amount)
+    }
+
+    // 计算购买shares的总价格（含费用），返回值单位为MIST
+    public fun get_buy_price_after_fee(shares_trading: &SharesTrading, shares_subject: address, amount: u64): u64 {
+        let price = get_buy_price(shares_trading, shares_subject, amount);
+        let protocol_fee = price * PROTOCOL_FEE_PERCENT / BASIS_POINTS;
+        let subject_fee = price * SUBJECT_FEE_PERCENT / BASIS_POINTS;
+        
+        price + protocol_fee + subject_fee
+    }
+
+    // 计算出售shares后获得的金额（扣除费用后），返回值单位为MIST
+    public fun get_sell_price_after_fee(shares_trading: &SharesTrading, shares_subject: address, amount: u64): u64 {
+        let price = get_sell_price(shares_trading, shares_subject, amount);
+        let protocol_fee = price * PROTOCOL_FEE_PERCENT / BASIS_POINTS;
+        let subject_fee = price * SUBJECT_FEE_PERCENT / BASIS_POINTS;
+        
+        price - protocol_fee - subject_fee
     }
 
     // Buy shares
@@ -90,7 +149,7 @@ module shares_trading::shares_trading {
         shares_trading: &mut SharesTrading,
         shares_subject: address,
         amount: u64,
-        payment: &mut Coin<SUI>,
+        payment: Coin<SUI>,
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
@@ -107,14 +166,14 @@ module shares_trading::shares_trading {
         // Only the subject can buy the first share
         assert!(supply > 0 || shares_subject == sender, EOnlySubjectCanBuyFirstShare);
         
-        // Calculate price and fees
+        // Calculate price and fees (单位: MIST)
         let price = get_price(supply, amount);
         let protocol_fee = price * PROTOCOL_FEE_PERCENT / BASIS_POINTS;
         let subject_fee = price * SUBJECT_FEE_PERCENT / BASIS_POINTS;
         let total_cost = price + protocol_fee + subject_fee;
         
         // Check if payment is sufficient
-        assert!(coin::value(payment) >= total_cost, EInsufficientPayment);
+        assert!(coin::value(&payment) >= total_cost, EInsufficientPayment);
         
         // Update shares balance
         if (!table::contains(&shares_trading.shares_balance, shares_subject)) {
@@ -135,7 +194,7 @@ module shares_trading::shares_trading {
         *supply_ref = *supply_ref + amount;
         
         // Process payment
-        let paid = coin::split(payment, total_cost, ctx);
+        let paid = coin::split(&mut payment, total_cost, ctx);
         let paid_balance = coin::into_balance(paid);
         
         // Withdraw protocol fee
@@ -148,6 +207,9 @@ module shares_trading::shares_trading {
         
         // Add remaining amount to the liquidity pool
         balance::join(&mut shares_trading.liquidity_pool, paid_balance);
+        
+        // Return remaining coins to sender
+        transfer::public_transfer(payment, sender);
         
         // Emit event
         event::emit(Trade {
@@ -186,7 +248,7 @@ module shares_trading::shares_trading {
         let user_balance = table::borrow_mut(balances, sender);
         assert!(*user_balance >= amount, EInsufficientShares);
         
-        // Calculate price and fees
+        // Calculate price and fees (单位: MIST)
         let price = get_price(supply - amount, amount);
         let protocol_fee = price * PROTOCOL_FEE_PERCENT / BASIS_POINTS;
         let subject_fee = price * SUBJECT_FEE_PERCENT / BASIS_POINTS;
@@ -258,5 +320,35 @@ module shares_trading::shares_trading {
         assert!(coin::value(payment) >= amount, EInsufficientPayment);
         let liquidity = coin::split(payment, amount, ctx);
         balance::join(&mut shares_trading.liquidity_pool, coin::into_balance(liquidity));
+    }
+
+    // Get current supply for a subject
+    public fun get_current_supply(shares_trading: &SharesTrading, subject: address): u64 {
+        if (table::contains(&shares_trading.shares_supply, subject)) {
+            *table::borrow(&shares_trading.shares_supply, subject)
+        } else {
+            0
+        }
+    }
+
+    // 获取用户持有的shares余额
+    public fun get_shares_balance(shares_trading: &SharesTrading, subject: address, user: address): u64 {
+        if (!table::contains(&shares_trading.shares_balance, subject)) {
+            return 0
+        };
+        
+        let balances = table::borrow(&shares_trading.shares_balance, subject);
+        
+        if (!table::contains(balances, user)) {
+            return 0
+        };
+        
+        *table::borrow(balances, user)
+    }
+
+    #[test_only]
+    /// 仅用于测试的初始化函数
+    public fun init_for_testing(ctx: &mut TxContext) {
+        init(ctx)
     }
 } 
