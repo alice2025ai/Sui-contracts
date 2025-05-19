@@ -73,7 +73,7 @@ module shares_trading::shares_trading {
     }
 
     // Function to calculate price (using the sum of squares pricing formula)
-    // 返回值单位为MIST (1 SUI = 10^9 MIST)
+    // Return value is in MIST (1 SUI = 10^9 MIST)
     fun get_price(supply: u64, amount: u64): u64 {
         // Handle edge cases
         if (supply == 0 && amount == 1) {
@@ -99,14 +99,14 @@ module shares_trading::shares_trading {
         // Calculate summation (sum2 - sum1) and apply scaling factor
         let summation = sum2 - sum1;
         
-        // 定义MIST精度常量 (1 SUI = 10^9 MIST)
+        // Define MIST precision constant (1 SUI = 10^9 MIST)
         let mist_precision = 1000000000; // 10^9
         
-        // 先乘以MIST精度因子再除以缩放因子，确保价格单位为MIST
+        // Multiply by MIST precision factor before dividing by scaling factor to ensure price is in MIST
         (summation * mist_precision) / 16
     }
 
-    // 计算购买shares的价格（不含费用），返回值单位为MIST
+    // Calculate the price to buy shares (excluding fees), return value is in MIST
     public fun get_buy_price(shares_trading: &SharesTrading, shares_subject: address, amount: u64): u64 {
         let supply = if (table::contains(&shares_trading.shares_supply, shares_subject)) {
             *table::borrow(&shares_trading.shares_supply, shares_subject)
@@ -117,7 +117,7 @@ module shares_trading::shares_trading {
         get_price(supply, amount)
     }
 
-    // 计算出售shares的价格（不含费用），返回值单位为MIST
+    // Calculate the price to sell shares (excluding fees), return value is in MIST
     public fun get_sell_price(shares_trading: &SharesTrading, shares_subject: address, amount: u64): u64 {
         assert!(table::contains(&shares_trading.shares_supply, shares_subject), EInsufficientShares);
         let supply = *table::borrow(&shares_trading.shares_supply, shares_subject);
@@ -126,7 +126,7 @@ module shares_trading::shares_trading {
         get_price(supply - amount, amount)
     }
 
-    // 计算购买shares的总价格（含费用），返回值单位为MIST
+    // Calculate the total price to buy shares (including fees), return value is in MIST
     public fun get_buy_price_after_fee(shares_trading: &SharesTrading, shares_subject: address, amount: u64): u64 {
         let price = get_buy_price(shares_trading, shares_subject, amount);
         let protocol_fee = price * PROTOCOL_FEE_PERCENT / BASIS_POINTS;
@@ -135,7 +135,7 @@ module shares_trading::shares_trading {
         price + protocol_fee + subject_fee
     }
 
-    // 计算出售shares后获得的金额（扣除费用后），返回值单位为MIST
+    // Calculate the amount received after selling shares (after deducting fees), return value is in MIST
     public fun get_sell_price_after_fee(shares_trading: &SharesTrading, shares_subject: address, amount: u64): u64 {
         let price = get_sell_price(shares_trading, shares_subject, amount);
         let protocol_fee = price * PROTOCOL_FEE_PERCENT / BASIS_POINTS;
@@ -166,7 +166,7 @@ module shares_trading::shares_trading {
         // Only the subject can buy the first share
         assert!(supply > 0 || shares_subject == sender, EOnlySubjectCanBuyFirstShare);
         
-        // Calculate price and fees (单位: MIST)
+        // Calculate price and fees (unit: MIST)
         let price = get_price(supply, amount);
         let protocol_fee = price * PROTOCOL_FEE_PERCENT / BASIS_POINTS;
         let subject_fee = price * SUBJECT_FEE_PERCENT / BASIS_POINTS;
@@ -248,7 +248,7 @@ module shares_trading::shares_trading {
         let user_balance = table::borrow_mut(balances, sender);
         assert!(*user_balance >= amount, EInsufficientShares);
         
-        // Calculate price and fees (单位: MIST)
+        // Calculate price and fees (unit: MIST)
         let price = get_price(supply - amount, amount);
         let protocol_fee = price * PROTOCOL_FEE_PERCENT / BASIS_POINTS;
         let subject_fee = price * SUBJECT_FEE_PERCENT / BASIS_POINTS;
@@ -331,7 +331,7 @@ module shares_trading::shares_trading {
         }
     }
 
-    // 获取用户持有的shares余额
+    // Get the user's shares balance
     public fun get_shares_balance(shares_trading: &SharesTrading, subject: address, user: address): u64 {
         if (!table::contains(&shares_trading.shares_balance, subject)) {
             return 0
@@ -347,7 +347,7 @@ module shares_trading::shares_trading {
     }
 
     #[test_only]
-    /// 仅用于测试的初始化函数
+    /// Initialization function for testing only
     public fun init_for_testing(ctx: &mut TxContext) {
         init(ctx)
     }
